@@ -1,0 +1,61 @@
+function sysCall_init()
+    sensorH=sim.getObject('.')
+    counter=0
+    handleEvery=5 -- handle the sensor every 5th simulation frame
+    if not simIM then
+        sim.addLog(sim.verbosity_scriptwarnings,"The image plugin (simExtImage) was not found, or could not correctly be loaded. Image processing based on that plugin will not be executed.")
+    end
+end
+
+function sysCall_cleanup()
+    sim.resetVisionSensor(sensorH)
+end
+
+function sysCall_sensing()
+    -- We explicitly handle the vision sensor (the sensor is flagged as "Explicit handling"):
+    if (counter % handleEvery)==0 then
+        local trigger,packet1,packet2=sim.handleVisionSensor(sensorH)
+        if trigger==1 then
+            sim.addLog(sim.verbosity_scriptinfos,"Sensor was triggered. Packet 2 contains: "..getAsString(packet2))
+        end
+    end
+    counter=counter+1
+end
+
+function sysCall_vision(inData)
+    -- inData.handle: handle of the vision sensor
+    -- inData.resolution: resolution of the vision sensor
+    -- inData.clippingPlanes: near and far clipping plane of the vision sensor
+    -- inData.viewAngle: the view angle if the vision sensor is in perspective operation
+    -- inData.orthoSize: the size of the view if the vision sensor is in orthogonal operation
+    -- inData.perspectiveOperation: whether the vision sensor is in perspective operation
+
+    -- e.g. use very simple functions from the vision plugin (simExtVision):
+    simVision.sensorImgToWorkImg(inData.handle)
+    simVision.edgeDetectionOnWorkImg(inData.handle,0.2)
+    simVision.swapWorkImgWithBuffer1(inData.handle)
+    simVision.uniformImgToWorkImg(inData.handle,{0.5,0.25,0})
+    simVision.addBuffer1ToWorkImg(inData.handle)
+    simVision.workImgToSensorImg(inData.handle)
+    
+    -- and/or, use more powerful functions from the image plugin (simExtImage):
+    if simIM then
+        local imgHandle=simIM.readFromVisionSensor(inData.handle)
+        local center={inData.resolution[1]/2,inData.resolution[2]/2}
+        local radius=(inData.resolution[1]+inData.resolution[2])/8
+        simIM.circle(imgHandle,center,radius,{255,255,0},4)
+        simIM.writeToVisionSensor(imgHandle,inData.handle)
+        simIM.destroy(imgHandle)
+    end
+
+    -- Or you can directly operate on the image buffer:
+    local image=sim.getVisionSensorImg(inData.handle)
+    sim.transformImage(image,inData.resolution,4)
+    image=sim.transformBuffer(image,sim.buffer_uint8rgb,1,0,sim.buffer_uint8bgr)
+    sim.setVisionSensorImg(inData.handle,image)
+    
+    outData={}
+    outData.trigger=true -- whether the sensor should trigger
+    outData.packedPackets={sim.packFloatTable({1,42,57})} -- filters may append packets (in packed form, use sim.packFloatTable to pack) to this table
+    return outData
+end
