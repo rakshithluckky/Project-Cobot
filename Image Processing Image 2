@@ -1,0 +1,105 @@
+ function sysCall_init()
+    sensor=sim.getObject('/sensor')
+    --object = sim.getObject('/Cuboid1')
+    sphereContainer=sim.addDrawingObject(sim.drawing_spherepts,0.03,0,-1,9999,{1,0,1})
+    xAngle=sim.getObjectFloatParam(sensor,sim.visionfloatparam_perspective_angle)
+    perspAngle=sim.getObjectFloatParam(sensor,sim.visionfloatparam_perspective_angle)
+    nearClip=sim.getObjectFloatParam(sensor,sim.visionfloatparam_near_clipping)
+    farClip=sim.getObjectFloatParam(sensor,sim.visionfloatparam_near_clipping)
+    resX=sim.getObjectInt32Param(sensor,sim.visionintparam_resolution_x)
+    resY=sim.getObjectInt32Param(sensor,sim.visionintparam_resolution_y)
+    yAngle=xAngle
+    ratio=resX/resY
+    if resX>resY then
+        yAngle=2*math.atan(math.tan(xAngle/2)/ratio)
+    else
+        xAngle=2*math.atan(math.tan(yAngle/2)/ratio)
+    end
+    if (ratio>1) then
+        fX=0.5/math.tan(perspAngle/2)
+        fY=0.5/math.tan(perspAngle/2)/ratio
+    else
+        fX=0.5/math.tan(perspAngle/2)*ratio
+        fY=0.5/math.tan(perspAngle/2)
+    end
+        
+end
+
+function sysCall_vision(inData)
+    local retVal={}
+    retVal.trigger=false
+    retVal.packedPackets={}
+    simVision.sensorImgToWorkImg(inData.handle)
+    local trig,packedPacket=simVision.blobDetectionOnWorkImg(inData.handle,0.1,0,false) 
+    if trig then retVal.trigger=true end 
+    if packedPacket then retVal.packedPackets[#retVal.packedPackets+1]=packedPacket end
+    simVision.workImgToSensorImg(inData.handle)
+    return retVal
+end
+function blob3DPOints()
+    local detectionCount,aux1,aux2
+    local numBlobs,blobSize,u,v,U,V
+    local depthV,depth
+    local s={}
+    local colors={}
+    detectionCount,aux1,aux2 = sim.handleVisionSensor(sensor)
+    result,t0,t1=sim.readVisionSensor(sensor) -- Here we read the image processing camera!
+    print("Size:")
+    print(t1[3])
+ --   result,aux3,aux4 = sim.checkVisionSensor(sensor,object)
+  --  print(result)
+    numBlobs=aux2[1] --number of blobs
+    blobSize=aux2[2] --amount of bytes per blob
+    for i=1, numBlobs,1 do
+        u=aux2[(i-1)*blobSize+5] --normalized x coord
+        v=aux2[(i-1)*blobSize+6] --normalized y coord
+        U=1+math.floor(u*(resX-0.99))
+        V=1+math.floor(v*(resY-0.99))
+        depthV1=sim.getVisionSensorDepth(sensor,0,{U,V},{1,1})
+        depthV = sim.unpackFloatTable(depthV1,0,0,0)
+        colorData=sim.getVisionSensorImg(sensor,0,0,{U,V},{1,1})
+        colors=sim.unpackUInt8Table(colorData,0,0)
+        --colors[i]=color
+        depth=nearClip+(farClip-nearClip)*depthV[1]
+        s[i]={depth*(0.5-u)/fX,depth*(v-0.5)/fY,depth}
+    end
+    return colours,s
+end
+
+function sysCall_sensing()
+
+    local m=sim.getObjectMatrix(sensor,sim.handle_world)
+    sim.addDrawingObjectItem(sphereContainer,nil)
+    local res,packet1,packet2=sim.handleVisionSensor(sensor)
+    if res>=0 then
+        local blobCnt=packet2[1]
+        local valCnt=packet2[2]
+        for i=0,blobCnt-1,1 do
+            local blobSize=packet2[2+valCnt*i+1]
+            local blobOrientation=packet2[2+valCnt*i+2]
+            local blobPositionX=packet2[2+valCnt*i+3]
+            local blobPositionY=packet2[2+valCnt*i+4]
+            local blobWidth=packet2[2+valCnt*i+5]
+            local blobHeight=packet2[2+valCnt*i+6]
+            local depth=sim.getVisionSensorDepth(sensor,1,{1+math.floor(blobPositionX*(resX-0.99)),1+math.floor(blobPositionY*(resY-0.99))},{1,1})
+            depth=sim.unpackFloatTable(depth)
+            local coord={0,0,depth[1]}
+            local x=0.5-blobPositionX
+            local y=blobPositionY-0.5
+            coord[1]=depth[1]*math.tan(xAngle*0.5)*(0.5-blobPositionX)/0.5
+            coord[2]=depth[1]*math.tan(yAngle*0.5)*(blobPositionY-0.5)/0.5
+            coord=sim.multiplyVector(m,coord)
+            -- coord now contains the position of the blob, in world coordinates
+            sim.addDrawingObjectItem(sphereContainer,coord)
+            
+        end
+    end
+    
+    coloursRef,sRef = blob3DPOints()
+    print("Relative distance:")
+    print(sRef)
+end
+
+function sysCall_cleanup()
+    sim.removeDrawingObject(sphereContainer)
+end
