@@ -1,0 +1,156 @@
+function sysCall_init()
+    conveyor = sim.getObject('/conveyor')
+    corout=coroutine.create(coroutineMain)
+    
+    -- Take a few handles from the dynamic robot:
+    simBase=sim.getObject('.')
+    simTip=sim.getObject('./tip')
+    simTarget=sim.getObject('./target')
+    gripperHandle=sim.getObject('./RG2')
+    simJoints={}
+    for i=1,6,1 do
+        simJoints[i]=sim.getObject('./joint',{index=i-1})
+    end
+
+    -- Prepare an ik group, using the convenience function 'simIK.addIkElementFromScene':
+    ikEnv=simIK.createEnvironment()
+    ikGroup=simIK.createIkGroup(ikEnv)
+    simIK.setIkGroupCalculation(ikEnv,ikGroup,simIK.method_damped_least_squares,0.01,10)
+    local ikElement=simIK.addIkElementFromScene(ikEnv,ikGroup,simBase,simTip,simTarget,simIK.constraint_pose)
+    simIK.setIkElementPrecision(ikEnv,ikGroup,ikElement,{0.0005,0.005*math.pi/180})
+end
+setGripperData=function(open,velocity,force)
+    if not velocity then
+        velocity=0.11
+    end
+    if not force then
+        force=20
+    end
+    if not open then
+        velocity=-velocity
+    end
+    
+    local dat={}
+    dat.velocity=velocity
+    dat.force=force
+    sim.writeCustomDataBlock(gripperHandle,'activity',sim.packTable(dat))
+end
+
+function sysCall_actuation()
+    if coroutine.status(corout)~='dead' then
+        local ok,errorMsg=coroutine.resume(corout)
+        if errorMsg then
+            error(debug.traceback(corout,errorMsg),2)
+        end
+    end
+end
+
+function moveToPoseCallback(pose,velocity,accel,auxData)
+    sim.setObjectPose(auxData.target,sim.handle_world,pose)
+    simIK.applyIkEnvironmentToScene(auxData.ikEnv,auxData.ikGroup)
+end
+
+function moveToPose_viaIK(maxVelocity,maxAcceleration,maxJerk,targetPose,auxData)
+    local currentPose=sim.getObjectPose(auxData.tip,sim.handle_world)
+    return sim.moveToPose(-1,currentPose,maxVelocity,maxAcceleration,maxJerk,targetPose,moveToPoseCallback,auxData,nil)
+end
+
+function moveToConfigCallback(config,velocity,accel,auxData)
+    for i=1,#auxData.joints,1 do
+        local jh=auxData.joints[i]
+        if sim.isDynamicallyEnabled(jh) then
+            sim.setJointTargetPosition(jh,config[i])
+        else    
+            sim.setJointPosition(jh,config[i])
+        end
+    end
+end
+
+function moveToConfig_viaFK(maxVelocity,maxAcceleration,maxJerk,goalConfig,auxData)
+    local startConfig={}
+    for i=1,#auxData.joints,1 do
+        startConfig[i]=sim.getJointPosition(auxData.joints[i])
+    end
+    sim.moveToConfig(-1,startConfig,nil,nil,maxVelocity,maxAcceleration,maxJerk,goalConfig,nil,moveToConfigCallback,auxData,nil)
+end
+
+function coroutineMain()
+    
+    
+    -- IK movement data:
+    local maxIkVel={0.45,0.45,0.45,4.5} -- vx,vy,vz in m/s, Vtheta is rad/s
+    local maxIkAccel={0.13,0.13,0.13,1.24} -- ax,ay,az in m/s^2, Atheta is rad/s^2
+    local maxIkJerk={0.1,0.1,0.1,0.2} -- is ignored (i.e. infinite) with RML type 2
+    local w1=sim.getObjectPose(sim.getObject('/waypoint1'),sim.handle_world)
+    local w2=sim.getObjectPose(sim.getObject('/waypoint2'),sim.handle_world)
+    local w3=sim.getObjectPose(sim.getObject('/waypoint3'),sim.handle_world)
+    local w4=sim.getObjectPose(sim.getObject('/waypoint4'),sim.handle_world)
+    local w5=sim.getObjectPose(sim.getObject('/waypoint5'),sim.handle_world)
+    local w6=sim.getObjectPose(sim.getObject('/waypoint6'),sim.handle_world)
+    local w7=sim.getObjectPose(sim.getObject('/waypoint7'),sim.handle_world)
+    local w8=sim.getObjectPose(sim.getObject('/waypoint8'),sim.handle_world)
+    local w9=sim.getObjectPose(sim.getObject('/waypoint9'),sim.handle_world)
+    local w10=sim.getObjectPose(sim.getObject('/waypoint10'),sim.handle_world)
+
+    -- FK movement data:
+    local initConf={}
+    local maxConfVel={}
+    local maxConfAccel={}
+    local maxConfJerk={}
+    for i=1,#simJoints,1 do
+        initConf[i]=sim.getJointPosition(simJoints[i])
+        maxConfVel[i]=45*math.pi/180
+        maxConfAccel[i]=1.15
+        maxConfJerk[i]=0.4
+    end
+
+    -- Execute the movement here:
+    local data={}
+    data.ikEnv=ikEnv
+    data.ikGroup=ikGroup
+    data.tip=simTip
+    data.target=simTarget
+    data.joints=simJoints
+    while true do
+        moveToConfig_viaFK(maxConfVel,maxConfAccel,maxConfJerk,initConf,data)
+        sim.setJointTargetPosition(conveyor,1)
+        sim.wait(2.5)
+        moveToPose_viaIK(maxIkVel,maxIkAccel,maxIkJerk,w1,data)
+        setGripperData(true)
+        sim.wait(1)
+        moveToPose_viaIK(maxIkVel,maxIkAccel,maxIkJerk,w2,data)
+        sim.wait(1.5)
+        moveToPose_viaIK(maxIkVel,maxIkAccel,maxIkJerk,w3,data)
+        setGripperData(false)
+        sim.wait(1)
+        moveToPose_viaIK(maxIkVel,maxIkAccel,maxIkJerk,w4,data)
+        sim.setJointTargetPosition(conveyor,2.5)    
+        sim.wait(2.7)
+        moveToPose_viaIK(maxIkVel,maxIkAccel,maxIkJerk,w5,data)
+        setGripperData(true)
+        moveToPose_viaIK(maxIkVel,maxIkAccel,maxIkJerk,w6,data)
+        sim.wait(2)
+        sim.setJointTargetPosition(conveyor,4)
+        sim.wait(5.5)
+        moveToPose_viaIK(maxIkVel,maxIkAccel,maxIkJerk,w7,data)
+        setGripperData(true)
+        sim.wait(1)
+        moveToPose_viaIK(maxIkVel,maxIkAccel,maxIkJerk,w8,data)
+        sim.wait(1.5)
+--        moveToPose_viaIK(maxIkVel,maxIkAccel,maxIkJerk,w9,data)
+  --      setGripperData(false)
+    --    sim.wait(1)
+        moveToPose_viaIK(maxIkVel,maxIkAccel,maxIkJerk,w10,data)
+        sim.setJointTargetPosition(conveyor,2.5)    
+        sim.wait(2.7)
+      --  moveToPose_viaIK(maxIkVel,maxIkAccel,maxIkJerk,w5,data)
+        --setGripperData(true)
+        --moveToPose_viaIK(maxIkVel,maxIkAccel,maxIkJerk,w6,data)
+        --sim.wait(2)
+        
+    end
+end
+
+function sysCall_cleanup()
+    simIK.eraseEnvironment(ikEnv)
+end
